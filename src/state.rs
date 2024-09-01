@@ -1,10 +1,13 @@
+use crate::vertex::{Vertex, INDICES, VERTICES};
+use image::GenericImageView;
 use std::iter;
-use wgpu::{BlendState, Buffer, BufferUsages, Color, ColorTargetState, ColorWrites, CommandEncoderDescriptor, DeviceDescriptor, Face, Features, FragmentState, FrontFace, IndexFormat, Instance, InstanceDescriptor, Limits, LoadOp, MultisampleState, Operations, PipelineCompilationOptions, PipelineLayout, PipelineLayoutDescriptor, PolygonMode, PrimitiveState, PrimitiveTopology, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, ShaderModuleDescriptor, ShaderSource, StoreOp, SurfaceConfiguration, SurfaceError, TextureUsages, TextureViewDescriptor, VertexState};
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
+use wgpu::{AddressMode, BindGroup, BindGroupDescriptor, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType, BlendState, Buffer, BufferUsages, Color, ColorTargetState, ColorWrites, CommandEncoderDescriptor, DeviceDescriptor, Extent3d, Face, Features, FilterMode, FragmentState, FrontFace, ImageCopyTexture, ImageDataLayout, IndexFormat, Instance, InstanceDescriptor, Limits, LoadOp, MultisampleState, Operations, PipelineCompilationOptions, PipelineLayout, PipelineLayoutDescriptor, PolygonMode, PrimitiveState, PrimitiveTopology, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, SurfaceConfiguration, SurfaceError, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureViewDescriptor, TextureViewDimension, VertexState};
+use wgpu::core::command::RenderPassErrorInner::Bind;
 use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
 use winit::window::Window;
-use crate::vertex::{Vertex, INDICES, VERTICES};
+use crate::texture::Texture;
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -20,47 +23,55 @@ pub struct State<'a> {
     vertex_buffer: Buffer,
     index_buffer: Buffer,
     num_vertices: u32,
-    num_indices: u32
+    num_indices: u32,
+    diffuse_bind_group: BindGroup,
+    diffuse_texture: Texture
 }
 
-impl <'a> State<'a> {
+impl<'a> State<'a> {
     pub async fn new(window: &'a Window) -> Self {
         let size = window.inner_size();
         let instance = Instance::new(InstanceDescriptor {
-            #[cfg(not(target_arch="wasm32"))]
+            #[cfg(not(target_arch = "wasm32"))]
             backends: wgpu::Backends::PRIMARY,
-            #[cfg(target_arch="wasm32")]
+            #[cfg(target_arch = "wasm32")]
             backends: wgpu::Backends::GL,
             ..Default::default()
         });
 
         let surface = instance.create_surface(window).unwrap();
-        let adapter = instance.request_adapter(
-            &RequestAdapterOptions {
+        let adapter = instance
+            .request_adapter(&RequestAdapterOptions {
                 power_preference: Default::default(),
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
-            }
-        ).await.unwrap();
+            })
+            .await
+            .unwrap();
 
-        let (device, queue) = adapter.request_device(
-            &DeviceDescriptor {
-                label: None,
-                required_features: Features::empty(),
-                required_limits: if cfg!(target_arch = "wasm32") {
-                    Limits::downlevel_webgl2_defaults()
-                } else {
-                    Limits::default()
+        let (device, queue) = adapter
+            .request_device(
+                &DeviceDescriptor {
+                    label: None,
+                    required_features: Features::empty(),
+                    required_limits: if cfg!(target_arch = "wasm32") {
+                        Limits::downlevel_webgl2_defaults()
+                    } else {
+                        Limits::default()
+                    },
+                    memory_hints: Default::default(),
                 },
-                memory_hints: Default::default(),
-            },
-            None // trace_path
-        ).await.unwrap();
+                None, // trace_path
+            )
+            .await
+            .unwrap();
 
         let surface_caps = surface.get_capabilities(&adapter);
 
         // First srgb one or just the first one
-        let surface_format = surface_caps.formats.iter()
+        let surface_format = surface_caps
+            .formats
+            .iter()
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
@@ -76,6 +87,47 @@ impl <'a> State<'a> {
             view_formats: vec![],
         };
 
+        surface.configure(&device, &config);
+        let diffuse_texture = Texture::from_bytes(&device, &queue, include_bytes!("happy-tree.png"), "a tree").unwrap();
+
+        let texture_bind_group_layout =
+        device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("bg_layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                }
+            ],
+        });
+
+        let diffuse_bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("bind_group"),
+            layout: &texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                }
+            ],
+        });
+
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Shader"),
             source: ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
@@ -83,7 +135,7 @@ impl <'a> State<'a> {
 
         let render_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Pipe Layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&texture_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -151,7 +203,9 @@ impl <'a> State<'a> {
             vertex_buffer,
             num_vertices,
             index_buffer,
-            num_indices
+            num_indices,
+            diffuse_bind_group,
+            diffuse_texture
         }
     }
 
@@ -176,33 +230,41 @@ impl <'a> State<'a> {
 
     pub fn render(&mut self) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
-        let view = output.texture.create_view(&TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Render Encoder")
-        });
+        let view = output
+            .texture
+            .create_view(&TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         {
             let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Render Pass"),
-                color_attachments: &[
-                    Some(RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: Operations {
-                            load: LoadOp::Clear(Color { r: 0.1, g: 0.3, b: 0.2, a: 1.0 }),
-                            store: StoreOp::Store
-                        },
-                    })
-                ],
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(Color {
+                            r: 0.1,
+                            g: 0.3,
+                            b: 0.2,
+                            a: 1.0,
+                        }),
+                        store: StoreOp::Store,
+                    },
+                })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_indices, 0,0..1);
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 
         self.queue.submit(iter::once(encoder.finish()));

@@ -1,5 +1,6 @@
 mod state;
 mod vertex;
+mod texture;
 
 use winit::error::EventLoopError;
 use winit::event::{ElementState, Event, KeyEvent, WindowEvent};
