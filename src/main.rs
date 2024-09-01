@@ -1,4 +1,5 @@
 mod state;
+mod vertex;
 
 use winit::error::EventLoopError;
 use winit::event::{ElementState, Event, KeyEvent, WindowEvent};

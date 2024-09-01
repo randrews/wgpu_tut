@@ -1,8 +1,10 @@
 use std::iter;
-use wgpu::{BlendState, Color, ColorTargetState, ColorWrites, CommandEncoderDescriptor, DeviceDescriptor, Face, Features, FragmentState, FrontFace, Instance, InstanceDescriptor, Limits, LoadOp, MultisampleState, Operations, PipelineCompilationOptions, PipelineLayout, PipelineLayoutDescriptor, PolygonMode, PrimitiveState, PrimitiveTopology, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, ShaderModuleDescriptor, ShaderSource, StoreOp, SurfaceConfiguration, SurfaceError, TextureUsages, TextureViewDescriptor, VertexState};
+use wgpu::{BlendState, Buffer, BufferUsages, Color, ColorTargetState, ColorWrites, CommandEncoderDescriptor, DeviceDescriptor, Face, Features, FragmentState, FrontFace, IndexFormat, Instance, InstanceDescriptor, Limits, LoadOp, MultisampleState, Operations, PipelineCompilationOptions, PipelineLayout, PipelineLayoutDescriptor, PolygonMode, PrimitiveState, PrimitiveTopology, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, ShaderModuleDescriptor, ShaderSource, StoreOp, SurfaceConfiguration, SurfaceError, TextureUsages, TextureViewDescriptor, VertexState};
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
 use winit::window::Window;
+use crate::vertex::{Vertex, INDICES, VERTICES};
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -14,7 +16,11 @@ pub struct State<'a> {
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
     window: &'a Window,
-    render_pipeline: RenderPipeline
+    render_pipeline: RenderPipeline,
+    vertex_buffer: Buffer,
+    index_buffer: Buffer,
+    num_vertices: u32,
+    num_indices: u32
 }
 
 impl <'a> State<'a> {
@@ -88,7 +94,7 @@ impl <'a> State<'a> {
                 module: &shader,
                 entry_point: "vs_main",
                 compilation_options: PipelineCompilationOptions::default(),
-                buffers: &[],
+                buffers: &[Vertex::desc()],
             },
             depth_stencil: None,
             fragment: Some(FragmentState {
@@ -119,6 +125,21 @@ impl <'a> State<'a> {
             cache: None,
         });
 
+        let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("verty buffy"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: BufferUsages::VERTEX,
+        });
+
+        let num_vertices = VERTICES.len() as u32;
+
+        let index_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("index bfr"),
+            contents: bytemuck::cast_slice(INDICES),
+            usage: BufferUsages::INDEX,
+        });
+        let num_indices = INDICES.len() as u32;
+
         Self {
             surface,
             device,
@@ -126,7 +147,11 @@ impl <'a> State<'a> {
             config,
             size,
             window,
-            render_pipeline
+            render_pipeline,
+            vertex_buffer,
+            num_vertices,
+            index_buffer,
+            num_indices
         }
     }
 
@@ -175,7 +200,9 @@ impl <'a> State<'a> {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.draw(0..3, 0..1);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint16);
+            render_pass.draw_indexed(0..self.num_indices, 0,0..1);
         }
 
         self.queue.submit(iter::once(encoder.finish()));
